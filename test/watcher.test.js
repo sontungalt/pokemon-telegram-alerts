@@ -1,0 +1,202 @@
+import assert from 'node:assert/strict';
+import test from 'node:test';
+
+import { AlertGate } from '../src/alert-gate.js';
+import { createInterruptibleSleep, runWatcher, scanRound } from '../src/watcher.js';
+
+const products = [
+  { name: 'First item', url: 'https://s.lazada.sg/s.first' },
+  { name: 'Second item', url: 'https://s.lazada.sg/s.second' },
+];
+
+const quietLogger = { error() {}, info() {}, warn() {} };
+
+test('observes every listing and notifies only for an alertable item', async () => {
+  const observed = [];
+  const notices = [];
+
+  const summary = await scanRound({
+    products,
+    observe: async (product) => {
+      observed.push(product.name);
+      return {
+        productUrl: product.url,
+        productName: product.name,
+        available: product.name === 'First item',
+        priceCents: 8990,
+      };
+    },
+    alertGate: new AlertGate(),
+    notify: async (observation, reason) => notices.push({ observation, reason }),
+    logger: quietLogger,
+  });
+
+  assert.deepEqual(observed, ['First item', 'Second item']);
+  assert.deepEqual(summary, { observed: 2, failures: 0, alerts: 1 });
+  assert.equal(notices.length, 1);
+  assert.equal(notices[0].reason, 'available');
+});
+
+test('continues a round after one listing check fails', async () => {
+  const observed = [];
+  const errors = [];
+
+  const summary = await scanRound({
+    products,
+    observe: async (product) => {
+      observed.push(product.name);
+      if (product.name === 'First item') throw new Error('temporary navigation failure');
+      return { productUrl: product.url, available: false, priceCents: null };
+    },
+    alertGate: new AlertGate(),
+    notify: async () => assert.fail('unavailable listing should not notify'),
+    logger: { ...quietLogger, error(...args) { errors.push(args); } },
+  });
+
+  assert.deepEqual(observed, ['First item', 'Second item']);
+  assert.deepEqual(summary, { observed: 1, failures: 1, alerts: 0 });
+  assert.equal(errors.length, 1);
+  assert.match(errors[0][0], /First item/);
+});
+
+test('does not repeat an alert for an unchanged available listing', async () => {
+  const gate = new AlertGate();
+  let sends = 0;
+  const input = {
+    products: [products[0]],
+    observe: async (product) => ({ productUrl: product.url, available: true, priceCents: 8990 }),
+    alertGate: gate,
+    notify: async () => { sends += 1; },
+    logger: quietLogger,
+  };
+
+  await scanRound(input);
+  await scanRound(input);
+
+  assert.equal(sends, 1);
+});
+
+test('retries an alert on the next round if Telegram delivery fails', async () => {
+  const gate = new AlertGate();
+  let attempts = 0;
+  const input = {
+    products: [products[0]],
+    observe: async (product) => ({ productUrl: product.url, available: true, priceCents: 8990 }),
+    alertGate: gate,
+    notify: async () => {
+      attempts += 1;
+      if (attempts === 1) throw new Error('Telegram temporarily unavailable');
+    },
+    logger: quietLogger,
+  };
+
+  const failed = await scanRound(input);
+  const recovered = await scanRound(input);
+
+  assert.equal(attempts, 2);
+  assert.equal(failed.alerts, 0);
+  assert.equal(failed.failures, 1);
+  assert.equal(recovered.alerts, 1);
+});
+
+test('retries a failed price-change alert as a price change, not a first sighting', async () => {
+  const gate = new AlertGate();
+  const reasons = [];
+  let failNext = false;
+  let priceCents = 8990;
+
+  const input = {
+    products: [products[0]],
+    observe: async (product) => ({ productUrl: product.url, available: true, priceCents }),
+    alertGate: gate,
+    notify: async (_observation, reason) => {
+      reasons.push(reason);
+      if (failNext) throw new Error('Telegram temporarily unavailable');
+    },
+    logger: quietLogger,
+  };
+
+  await scanRound(input);
+  priceCents = 9990;
+  failNext = true;
+  await scanRound(input);
+  failNext = false;
+  await scanRound(input);
+
+  assert.deepEqual(reasons, ['available', 'price-changed', 'price-changed']);
+});
+
+test('stops checking the remaining listings once shutdown begins', async () => {
+  const observed = [];
+
+  const summary = await scanRound({
+    products,
+    observe: async (product) => {
+      observed.push(product.name);
+      return { productUrl: product.url, available: false, priceCents: null };
+    },
+    alertGate: new AlertGate(),
+    notify: async () => assert.fail('nothing is available'),
+    logger: quietLogger,
+    shouldContinue: () => observed.length === 0,
+  });
+
+  assert.deepEqual(observed, ['First item']);
+  assert.equal(summary.observed, 1);
+});
+
+test('waits for the configured interval plus jitter before the next round', async () => {
+  const waits = [];
+  let checks = 0;
+
+  await runWatcher({
+    config: { products: [], pollIntervalMs: 30_000, jitterMs: 5_000 },
+    observe: async () => assert.fail('there are no products'),
+    notify: async () => assert.fail('there are no products'),
+    sleep: async (milliseconds) => waits.push(milliseconds),
+    random: () => 0.5,
+    shouldContinue: () => {
+      checks += 1;
+      return checks < 3;
+    },
+    logger: quietLogger,
+  });
+
+  assert.deepEqual(waits, [32_500]);
+});
+
+test('reports one concise summary line per round', async () => {
+  const lines = [];
+
+  await runWatcher({
+    config: { products, pollIntervalMs: 30_000, jitterMs: 0 },
+    observe: async (product) => ({ productUrl: product.url, available: false, priceCents: null }),
+    notify: async () => {},
+    sleep: async () => {},
+    shouldContinue: () => lines.length < 1,
+    logger: { ...quietLogger, info(line) { lines.push(line); } },
+  });
+
+  assert.deepEqual(lines, ['Round complete: 2 checked, 0 alert(s), 0 failure(s).']);
+});
+
+test('an interrupted sleep resolves immediately instead of waiting out the interval', async () => {
+  const waiter = createInterruptibleSleep();
+  const startedAt = Date.now();
+
+  const pending = waiter.sleep(60_000);
+  waiter.interrupt();
+  await pending;
+
+  assert.ok(Date.now() - startedAt < 1_000);
+});
+
+test('sleeping after an interrupt returns without waiting', async () => {
+  const waiter = createInterruptibleSleep();
+  waiter.interrupt();
+  const startedAt = Date.now();
+
+  await waiter.sleep(60_000);
+
+  assert.ok(Date.now() - startedAt < 1_000);
+});

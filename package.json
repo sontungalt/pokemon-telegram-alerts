@@ -1,0 +1,19 @@
+{
+  "name": "pokemon-telegram-alerts",
+  "version": "1.0.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "start": "node src/index.js",
+    "test": "node --test",
+    "telegram:chat-id": "node src/telegram-chat-id.js",
+    "telegram:test": "node src/send-telegram-check.js"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.7",
+    "playwright": "1.63.0"
+  }
+}

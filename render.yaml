@@ -1,0 +1,21 @@
+services:
+  - type: worker
+    name: pokemon-telegram-alerts
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    autoDeploy: true
+    # Give the watcher room to finish its current check and close the browser.
+    maxShutdownDelaySeconds: 40
+    envVars:
+      # Both secrets are entered in the Render dashboard, never committed here.
+      - key: TELEGRAM_BOT_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: POLL_INTERVAL_SECONDS
+        value: "30"
+      - key: POLL_JITTER_SECONDS
+        value: "0"
+      - key: NAVIGATION_TIMEOUT_MS
+        value: "25000"
