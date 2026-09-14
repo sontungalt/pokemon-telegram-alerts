@@ -40,7 +40,7 @@ export async function scanRound({
   logger = console,
   shouldContinue = () => true,
 }) {
-  const summary = { observed: 0, failures: 0, alerts: 0 };
+  const summary = { observed: 0, failures: 0, alerts: 0, blocked: 0 };
 
   for (const product of products) {
     if (!shouldContinue()) break;
@@ -62,7 +62,13 @@ export async function scanRound({
       summary.alerts += 1;
     } catch (error) {
       summary.failures += 1;
-      logger.error(`Check failed for ${product.name}: ${error.message}`);
+      // A site-wide block would otherwise print one near-identical line per
+      // listing; it is counted here and summarised once for the whole round.
+      if (error.code === 'ANTI_BOT_CHALLENGE') {
+        summary.blocked += 1;
+      } else {
+        logger.error(`Check failed for ${product.name}: ${error.message}`);
+      }
     }
   }
 
@@ -76,10 +82,12 @@ export async function runWatcher({
   sleep = defaultSleep,
   random = Math.random,
   shouldContinue = () => true,
+  onBlockLifted = null,
   logger = console,
 }) {
   const { AlertGate } = await import('./alert-gate.js');
   const alertGate = new AlertGate();
+  let wasFullyBlocked = false;
 
   while (shouldContinue()) {
     const summary = await scanRound({
@@ -90,9 +98,23 @@ export async function runWatcher({
       logger,
       shouldContinue,
     });
+    const blockedNote = summary.blocked > 0
+      ? ` — ${summary.blocked} blocked by Lazada's anti-bot page, not checked.`
+      : '';
     logger.info(
-      `Round complete: ${summary.observed} checked, ${summary.alerts} alert(s), ${summary.failures} failure(s).`,
+      `Round complete: ${summary.observed} checked, ${summary.alerts} alert(s), ${summary.failures} failure(s).${blockedNote}`,
     );
+
+    // Tell the user the moment monitoring actually becomes possible again.
+    const fullyBlocked = summary.blocked > 0 && summary.observed === 0;
+    if (wasFullyBlocked && !fullyBlocked && summary.observed > 0 && onBlockLifted) {
+      try {
+        await onBlockLifted(summary);
+      } catch (error) {
+        logger.error(`Could not send the block-lifted notice: ${error.message}`);
+      }
+    }
+    wasFullyBlocked = fullyBlocked;
 
     if (!shouldContinue()) break;
     const jitter = config.jitterMs > 0 ? Math.floor(random() * config.jitterMs) : 0;

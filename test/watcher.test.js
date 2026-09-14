@@ -32,7 +32,7 @@ test('observes every listing and notifies only for an alertable item', async () 
   });
 
   assert.deepEqual(observed, ['First item', 'Second item']);
-  assert.deepEqual(summary, { observed: 2, failures: 0, alerts: 1 });
+  assert.deepEqual(summary, { observed: 2, failures: 0, alerts: 1, blocked: 0 });
   assert.equal(notices.length, 1);
   assert.equal(notices[0].reason, 'available');
 });
@@ -54,7 +54,7 @@ test('continues a round after one listing check fails', async () => {
   });
 
   assert.deepEqual(observed, ['First item', 'Second item']);
-  assert.deepEqual(summary, { observed: 1, failures: 1, alerts: 0 });
+  assert.deepEqual(summary, { observed: 1, failures: 1, alerts: 0, blocked: 0 });
   assert.equal(errors.length, 1);
   assert.match(errors[0][0], /First item/);
 });
@@ -199,4 +199,106 @@ test('sleeping after an interrupt returns without waiting', async () => {
   await waiter.sleep(60_000);
 
   assert.ok(Date.now() - startedAt < 1_000);
+});
+
+const blockedError = () => Object.assign(new Error('anti-bot challenge'), { code: 'ANTI_BOT_CHALLENGE' });
+
+test('counts blocked listings separately from real failures', async () => {
+  const summary = await scanRound({
+    products,
+    observe: async (product) => {
+      if (product.name === 'First item') throw blockedError();
+      throw new Error('navigation timeout');
+    },
+    alertGate: new AlertGate(),
+    notify: async () => {},
+    logger: quietLogger,
+  });
+
+  assert.equal(summary.blocked, 1);
+  assert.equal(summary.failures, 2);
+});
+
+test('does not log a line per listing when they are all blocked', async () => {
+  const errors = [];
+
+  await scanRound({
+    products,
+    observe: async () => { throw blockedError(); },
+    alertGate: new AlertGate(),
+    notify: async () => {},
+    logger: { ...quietLogger, error(...a) { errors.push(a); } },
+  });
+
+  assert.deepEqual(errors, []);
+});
+
+test('still logs ordinary failures individually', async () => {
+  const errors = [];
+
+  await scanRound({
+    products: [products[0]],
+    observe: async () => { throw new Error('navigation timeout'); },
+    alertGate: new AlertGate(),
+    notify: async () => {},
+    logger: { ...quietLogger, error(...a) { errors.push(a); } },
+  });
+
+  assert.equal(errors.length, 1);
+});
+
+test('names the blocked count in the round summary', async () => {
+  const lines = [];
+
+  await runWatcher({
+    config: { products, pollIntervalMs: 30_000, jitterMs: 0 },
+    observe: async () => { throw blockedError(); },
+    notify: async () => {},
+    sleep: async () => {},
+    shouldContinue: () => lines.length < 1,
+    logger: { ...quietLogger, info(line) { lines.push(line); } },
+  });
+
+  assert.match(lines[0], /2 blocked/);
+});
+
+test('announces once when Lazada becomes readable after being blocked', async () => {
+  const announcements = [];
+  let rounds = 0;
+
+  await runWatcher({
+    config: { products: [products[0]], pollIntervalMs: 30_000, jitterMs: 0 },
+    observe: async (product) => {
+      rounds += 1;
+      if (rounds <= 2) throw blockedError();
+      return { productUrl: product.url, available: false, priceCents: null };
+    },
+    notify: async () => {},
+    onBlockLifted: async () => { announcements.push(rounds); },
+    sleep: async () => {},
+    shouldContinue: () => rounds < 4,
+    logger: quietLogger,
+  });
+
+  assert.deepEqual(announcements, [3]);
+});
+
+test('does not announce a block lift when nothing was ever blocked', async () => {
+  const announcements = [];
+  let rounds = 0;
+
+  await runWatcher({
+    config: { products: [products[0]], pollIntervalMs: 30_000, jitterMs: 0 },
+    observe: async (product) => {
+      rounds += 1;
+      return { productUrl: product.url, available: false, priceCents: null };
+    },
+    notify: async () => {},
+    onBlockLifted: async () => { announcements.push(rounds); },
+    sleep: async () => {},
+    shouldContinue: () => rounds < 3,
+    logger: quietLogger,
+  });
+
+  assert.deepEqual(announcements, []);
 });

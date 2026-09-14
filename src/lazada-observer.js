@@ -147,8 +147,22 @@ export async function observeListing(page, product, { timeoutMs, logger = consol
   // A blocked read must never be reported as "out of stock": that would silence
   // the alert for a listing we simply could not see. Raise it as a failure.
   if (snapshot.challenged || isChallengeUrl(finalUrl)) {
-    throw new Error(
-      `Lazada served an anti-bot challenge page instead of the listing for ${product.name}; it was not checked.`,
+    throw Object.assign(
+      new Error(
+        `Lazada served an anti-bot challenge page instead of the listing for ${product.name}; it was not checked.`,
+      ),
+      { code: 'ANTI_BOT_CHALLENGE' },
+    );
+  }
+
+  // A share bridge always has a title but never a purchase control, so it would
+  // otherwise be scored as a readable, out-of-stock listing. It is not a listing.
+  if (isShareUrl(finalUrl)) {
+    throw Object.assign(
+      new Error(
+        `Could not resolve the share link for ${product.name} to a Lazada product page; it was not checked.`,
+      ),
+      { code: 'UNRESOLVED_SHARE_LINK' },
     );
   }
 

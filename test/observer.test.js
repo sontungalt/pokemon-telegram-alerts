@@ -86,14 +86,38 @@ test('falls back to the original URL and logs when the origin link is not Lazada
     finalUrl: 'https://s.lazada.sg/s.share-d',
   });
 
-  await observeListing(page, product, {
-    timeoutMs: TIMEOUT,
-    logger: { ...quietLogger, warn(line) { warnings.push(line); } },
-  });
+  await assert.rejects(
+    () => observeListing(page, product, {
+      timeoutMs: TIMEOUT,
+      logger: { ...quietLogger, warn(line) { warnings.push(line); } },
+    }),
+    /could not resolve|not checked/i,
+  );
 
+  // It still falls back to the original URL, but never scores the share
+  // bridge itself as a readable listing.
   assert.equal(page.calls[1].url, product.url);
   assert.equal(warnings.length, 1);
   assert.match(warnings[0], /Shared item/);
+});
+
+test('never reports the share bridge page as an out-of-stock listing', async () => {
+  resetShareLinkCache();
+  const product = { name: 'Shared item', url: 'https://s.lazada.sg/s.share-f' };
+  const page = fakePage({
+    originHref: null,
+    // A share page has a real title but never a purchase control.
+    snapshot: { title: 'Pokémon Example ETB', priceText: null, control: null },
+    finalUrl: product.url,
+  });
+
+  await assert.rejects(
+    () => observeListing(page, product, { timeoutMs: TIMEOUT, logger: quietLogger }),
+    (error) => {
+      assert.equal(error.code, 'UNRESOLVED_SHARE_LINK');
+      return true;
+    },
+  );
 });
 
 test('does not cache a failed share-link resolution', async () => {
@@ -105,9 +129,9 @@ test('does not cache a failed share-link resolution', async () => {
     fakePage({ originHref: null, snapshot: purchasable, finalUrl: product.url }),
     product,
     options,
-  );
+  ).catch(() => {});
   const retry = fakePage({ originHref: null, snapshot: purchasable, finalUrl: product.url });
-  await observeListing(retry, product, options);
+  await observeListing(retry, product, options).catch(() => {});
 
   assert.equal(retry.calls[0].options.waitUntil, 'commit');
 });
@@ -274,4 +298,16 @@ test('still reports a readable sold-out listing as unavailable rather than faili
   `);
 
   assert.equal(observation.available, false);
+});
+
+test('marks an anti-bot failure with a code the watcher can count', async () => {
+  await observeHtml(`<div id="baxia-dialog-content">Click to feedback</div>`)
+    .then(() => assert.fail('expected a challenge error'))
+    .catch((error) => assert.equal(error.code, 'ANTI_BOT_CHALLENGE'));
+});
+
+test('does not mark an ordinary unreadable page as an anti-bot failure', async () => {
+  await observeHtml('<html><body></body></html>')
+    .then(() => assert.fail('expected an unreadable error'))
+    .catch((error) => assert.notEqual(error.code, 'ANTI_BOT_CHALLENGE'));
 });

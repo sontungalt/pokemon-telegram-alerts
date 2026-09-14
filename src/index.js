@@ -2,7 +2,7 @@ import { chromium } from 'playwright';
 
 import { loadConfig } from './config.js';
 import { observeListing } from './lazada-observer.js';
-import { formatAvailabilityMessage, sendTelegramMessage } from './telegram.js';
+import { formatAvailabilityMessage, sendTelegramMessage, singaporeTimestamp } from './telegram.js';
 import { createInterruptibleSleep, runWatcher } from './watcher.js';
 
 // Skipped resources never affect availability detection and make each check faster.
@@ -47,6 +47,19 @@ async function main() {
         timeoutMs: config.navigationTimeoutMs,
         logger: console,
       }),
+      onBlockLifted: async () => {
+        await sendTelegramMessage({
+          token: config.telegramBotToken,
+          chatId: config.telegramChatId,
+          text: [
+            '<b>Lazada is readable again</b>',
+            '',
+            'The anti-bot block has cleared and restock monitoring is live.',
+            `Resumed: ${singaporeTimestamp(new Date())}`,
+          ].join('\n'),
+        });
+        console.log('Lazada is readable again; monitoring resumed.');
+      },
       notify: async (observation, reason) => {
         await sendTelegramMessage({
           token: config.telegramBotToken,
