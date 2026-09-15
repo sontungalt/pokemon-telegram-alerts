@@ -71,7 +71,8 @@ export async function scanRound({
       if (error.code === 'ANTI_BOT_CHALLENGE') {
         summary.blocked += 1;
       } else {
-        logger.error(`Check failed for ${product.name}: ${error.message}`);
+        // Driver errors carry a multi-line call log; keep the summary to one line.
+        logger.error(`Check failed for ${product.name}: ${error.message.split('\n')[0]}`);
       }
     }
   }

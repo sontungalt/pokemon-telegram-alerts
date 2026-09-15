@@ -354,3 +354,19 @@ test('returns to the normal interval as soon as a listing is readable', async ()
 
   assert.deepEqual(waits, [60_000, 120_000, 30_000]);
 });
+
+test('logs only the first line of a multi-line failure', async () => {
+  const errors = [];
+
+  await scanRound({
+    products: [products[0]],
+    observe: async () => { throw new Error('page.goto timeout\nCall log:\n  - navigating\n  - waiting'); },
+    alertGate: new AlertGate(),
+    notify: async () => {},
+    logger: { ...quietLogger, error(line) { errors.push(line); } },
+  });
+
+  assert.equal(errors.length, 1);
+  assert.equal(errors[0].includes('\n'), false);
+  assert.match(errors[0], /page\.goto timeout/);
+});

@@ -3,6 +3,7 @@ import { chromium } from 'playwright';
 import { loadConfig } from './config.js';
 import { observeListing } from './lazada-observer.js';
 import { formatAvailabilityMessage, sendTelegramMessage, singaporeTimestamp } from './telegram.js';
+import { createTimestampedLogger } from './logger.js';
 import { createInterruptibleSleep, runWatcher } from './watcher.js';
 
 // Skipped resources never affect availability detection and make each check faster.
@@ -11,19 +12,20 @@ const SKIPPED_RESOURCES = new Set(['image', 'media', 'font']);
 async function main() {
   await import('dotenv/config');
   const config = loadConfig();
+  const logger = createTimestampedLogger(console);
   const waiter = createInterruptibleSleep();
 
   let stopping = false;
   const stop = (signal) => {
     if (stopping) return;
     stopping = true;
-    console.log(`Received ${signal}; finishing the current check, then shutting down.`);
+    logger.info(`Received ${signal}; finishing the current check, then shutting down.`);
     waiter.interrupt();
   };
   process.once('SIGINT', () => stop('SIGINT'));
   process.once('SIGTERM', () => stop('SIGTERM'));
 
-  console.log(
+  logger.info(
     `Watching ${config.products.length} Lazada listings every ${config.pollIntervalMs / 1_000}s. Alerts only; nothing is ever purchased.`,
   );
 
@@ -43,9 +45,10 @@ async function main() {
       config,
       shouldContinue: () => !stopping,
       sleep: (milliseconds) => waiter.sleep(milliseconds),
+      logger,
       observe: (product) => observeListing(page, product, {
         timeoutMs: config.navigationTimeoutMs,
-        logger: console,
+        logger,
       }),
       onBlockLifted: async () => {
         await sendTelegramMessage({
@@ -58,7 +61,7 @@ async function main() {
             `Resumed: ${singaporeTimestamp(new Date())}`,
           ].join('\n'),
         });
-        console.log('Lazada is readable again; monitoring resumed.');
+        logger.info('Lazada is readable again; monitoring resumed.');
       },
       notify: async (observation, reason) => {
         await sendTelegramMessage({
@@ -66,13 +69,13 @@ async function main() {
           chatId: config.telegramChatId,
           text: formatAvailabilityMessage(observation, reason, new Date()),
         });
-        console.log(`Sent ${reason} alert for ${observation.productName}.`);
+        logger.info(`Sent ${reason} alert for ${observation.productName}.`);
       },
     });
   } finally {
     await context.close().catch(() => {});
     await browser.close().catch(() => {});
-    console.log('Browser closed. Watcher stopped.');
+    logger.info('Browser closed. Watcher stopped.');
   }
 }
 
