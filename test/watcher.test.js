@@ -302,3 +302,55 @@ test('does not announce a block lift when nothing was ever blocked', async () =>
 
   assert.deepEqual(announcements, []);
 });
+
+test('backs off when every listing is blocked', async () => {
+  const waits = [];
+
+  await runWatcher({
+    config: { products: [products[0]], pollIntervalMs: 30_000, jitterMs: 0 },
+    observe: async () => { throw blockedError(); },
+    notify: async () => {},
+    sleep: async (ms) => { waits.push(ms); },
+    shouldContinue: () => waits.length < 3,
+    logger: quietLogger,
+  });
+
+  // 30s base, doubling for each consecutive fully-blocked round.
+  assert.deepEqual(waits, [60_000, 120_000, 240_000]);
+});
+
+test('caps the blocked backoff so it keeps checking', async () => {
+  const waits = [];
+
+  await runWatcher({
+    config: { products: [products[0]], pollIntervalMs: 30_000, jitterMs: 0 },
+    observe: async () => { throw blockedError(); },
+    notify: async () => {},
+    sleep: async (ms) => { waits.push(ms); },
+    shouldContinue: () => waits.length < 6,
+    logger: quietLogger,
+  });
+
+  assert.ok(Math.max(...waits) <= 600_000, `backoff exceeded cap: ${Math.max(...waits)}`);
+  assert.equal(waits.at(-1), 600_000);
+});
+
+test('returns to the normal interval as soon as a listing is readable', async () => {
+  const waits = [];
+  let rounds = 0;
+
+  await runWatcher({
+    config: { products: [products[0]], pollIntervalMs: 30_000, jitterMs: 0 },
+    observe: async (product) => {
+      rounds += 1;
+      if (rounds <= 2) throw blockedError();
+      return { productUrl: product.url, available: false, priceCents: null };
+    },
+    notify: async () => {},
+    sleep: async (ms) => { waits.push(ms); },
+    shouldContinue: () => rounds < 4,
+    logger: quietLogger,
+  });
+
+  assert.deepEqual(waits, [60_000, 120_000, 30_000]);
+});

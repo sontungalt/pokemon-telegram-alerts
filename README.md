@@ -97,17 +97,34 @@ npx playwright install chromium
 Stop the watcher with `Ctrl+C`. It finishes the listing it is on, closes the browser,
 and exits — usually within a second.
 
-## Keeping your Mac awake
+## Keeping it running
 
-A sleeping Mac stops the watcher. In a **separate Terminal window**, run:
+A sleeping Mac stops the watcher. `caffeinate` can wrap the watcher directly, so one
+command both runs it and keeps the machine awake:
 
 ```sh
-caffeinate -dimsu
+caffeinate -dimsu npm start
 ```
 
-Leave that window open for as long as you want the watcher running, and press `Ctrl+C`
-in it when you are done. It prevents display, idle, disk and system sleep. It does not
-keep the machine awake when the lid is closed on battery.
+Leave that Terminal window open; `Ctrl+C` stops both. It prevents display, idle, disk
+and system sleep, but it will not keep the machine awake with the lid closed on battery.
+
+To keep it running after the Terminal window is closed:
+
+```sh
+nohup caffeinate -dimsu npm start > watcher.log 2>&1 &
+```
+
+Then `tail -f watcher.log` to watch it, and `pkill -INT -f "node src/index.js"` to stop
+it cleanly.
+
+### Backing off while blocked
+
+While every listing is blocked the watcher cannot detect anything, so it doubles its
+wait after each fully-blocked round — 60s, 120s, 240s — up to a ceiling of 10 minutes.
+This costs no coverage (nothing is visible either way) and gives an IP-reputation block
+room to lapse. The moment any listing becomes readable it returns to the normal
+interval and sends you a Telegram notice that monitoring is live again.
 
 ## Configuration
 

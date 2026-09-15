@@ -1,5 +1,9 @@
 const defaultSleep = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds));
 
+// While every listing is blocked nothing can be detected, so waiting longer costs
+// no coverage and gives an IP-reputation block a chance to lapse.
+const BLOCKED_BACKOFF_CAP_MS = 600_000;
+
 /**
  * A sleep that can be cut short, so Ctrl+C does not have to wait out a full
  * polling interval before the watcher shuts down.
@@ -88,6 +92,7 @@ export async function runWatcher({
   const { AlertGate } = await import('./alert-gate.js');
   const alertGate = new AlertGate();
   let wasFullyBlocked = false;
+  let blockedStreak = 0;
 
   while (shouldContinue()) {
     const summary = await scanRound({
@@ -115,9 +120,18 @@ export async function runWatcher({
       }
     }
     wasFullyBlocked = fullyBlocked;
+    blockedStreak = fullyBlocked ? blockedStreak + 1 : 0;
 
     if (!shouldContinue()) break;
+
+    const interval = blockedStreak > 0
+      ? Math.min(config.pollIntervalMs * 2 ** blockedStreak, BLOCKED_BACKOFF_CAP_MS)
+      : config.pollIntervalMs;
+    if (blockedStreak > 0) {
+      logger.info(`Everything is blocked; waiting ${Math.round(interval / 1_000)}s before retrying.`);
+    }
+
     const jitter = config.jitterMs > 0 ? Math.floor(random() * config.jitterMs) : 0;
-    await sleep(config.pollIntervalMs + jitter);
+    await sleep(interval + jitter);
   }
 }
