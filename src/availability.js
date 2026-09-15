@@ -3,7 +3,8 @@ const UNAVAILABLE_CONTROL = /\b(out of stock|sold out|notify me|coming soon|unav
 
 export function parsePriceCents(priceText) {
   if (!priceText) return null;
-  const match = String(priceText).match(/(?:S\$|SGD)\s*([\d,]+(?:\.\d{1,2})?)/i);
+  // Lazada Singapore renders "$18.90"; S$ and SGD appear elsewhere on the site.
+  const match = String(priceText).match(/(?:S?\$|SGD)\s*([\d,]+(?:\.\d{1,2})?)/i);
   if (!match) return null;
 
   const dollars = Number(match[1].replace(/,/g, ''));

@@ -311,3 +311,61 @@ test('does not mark an ordinary unreadable page as an anti-bot failure', async (
     .then(() => assert.fail('expected an unreadable error'))
     .catch((error) => assert.notEqual(error.code, 'ANTI_BOT_CHALLENGE'));
 });
+
+test('waits for a listing that renders its purchase control after load', async () => {
+  resetShareLinkCache();
+  const realPage = await browser.newPage();
+  try {
+    const product = { name: 'Late render', url: 'https://www.lazada.sg/products/late-i1.html' };
+    const page = {
+      async goto() {
+        // Mirrors Lazada: the shell arrives first, details hydrate ~2s later.
+        await realPage.setContent(`
+          <title>Pokémon Example ETB</title>
+          <div id="app"></div>
+          <script>
+            setTimeout(() => {
+              document.getElementById('app').innerHTML =
+                '<span class="pdp-price">$45.90</span><div class="pdp-button">Add to Cart</div>';
+            }, 1200);
+          </script>
+        `);
+      },
+      evaluate: (...args) => realPage.evaluate(...args),
+      waitForSelector: (...args) => realPage.waitForSelector(...args),
+      waitForTimeout: (...args) => realPage.waitForTimeout(...args),
+      url: () => product.url,
+    };
+
+    const observation = await observeListing(page, product, { timeoutMs: TIMEOUT, logger: quietLogger });
+
+    assert.equal(observation.available, true);
+    assert.equal(observation.priceCents, 4590);
+  } finally {
+    await realPage.close();
+  }
+});
+
+test('reads the product price, not a recommendation carousel price', async () => {
+  const observation = await observeHtml(`
+    <title>Pokémon Example ETB</title>
+    <div class="pdp-mod-product-price-v2"><span class="pdp-v2-product-price-content">$45.90</span></div>
+    <div class="pdp-button">Add to Cart</div>
+    <div class="card-product-slot-price sale-price">$0.10</div>
+    <div class="card-product-slot-price sale-price">$4.02</div>
+  `);
+
+  assert.equal(observation.priceCents, 4590);
+});
+
+test('reports no price rather than a carousel price when the product price is absent', async () => {
+  const observation = await observeHtml(`
+    <title>Pokémon Example ETB</title>
+    <div class="pdp-button">Add to Cart</div>
+    <div class="card-product-slot-price sale-price">$0.10</div>
+    <div class="card-product-slot-price sale-price">$4.02</div>
+  `);
+
+  assert.equal(observation.priceCents, null);
+  assert.equal(observation.available, true);
+});

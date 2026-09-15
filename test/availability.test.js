@@ -89,3 +89,14 @@ test('survives a missing snapshot instead of throwing mid-round', () => {
     assert.equal(observation.priceCents, null);
   }
 });
+
+test('parses Lazada Singapore prices written with a bare dollar sign', () => {
+  assert.equal(parsePriceCents('$18.90'), 1890);
+  assert.equal(parsePriceCents('$90.90'), 9090);
+  assert.equal(parsePriceCents('$1,234.50'), 123450);
+});
+
+test('still parses the S$ and SGD forms', () => {
+  assert.equal(parsePriceCents('S$ 89.90'), 8990);
+  assert.equal(parsePriceCents('SGD 1,234.50'), 123450);
+});

@@ -27,6 +27,17 @@ function canonicalLazadaUrl(value) {
 // Alibaba serves its anti-bot interstitial from these paths instead of the listing.
 const CHALLENGE_URL_MARKERS = ['_____tmd_____', 'x5secdata', '/punish'];
 
+// Lazada ships a shell and hydrates the price and buy controls a second or two
+// later, so reading at domcontentloaded sees an empty page.
+const LISTING_CONTENT = [
+  '.pdp-price',
+  '[class*="pdp-mod-product-price" i]',
+  '[class*="pdp-v2-product-price" i]',
+  '.pdp-button',
+  '[class*="add-to-cart" i]',
+].join(', ');
+const HYDRATION_SETTLE_MS = 1_500;
+
 function isChallengeUrl(value) {
   return CHALLENGE_URL_MARKERS.some((marker) => String(value ?? '').includes(marker));
 }
@@ -120,9 +131,14 @@ function collectListingSnapshot() {
     ?? candidates[0]
     ?? null;
 
-  const priceText = textFromFirstMatch(['.pdp-price', '[class*="price" i]'])
-    || document.body?.innerText?.match(/(?:S\$|SGD)\s*[\d,]+(?:\.\d{1,2})?/i)?.[0]
-    || null;
+  // Only the product-detail price block is trusted. The generic [class*=price]
+  // also matches "you may also like" carousel cards, which would report some
+  // unrelated item's price and fire spurious price-change alerts.
+  const priceText = textFromFirstMatch([
+    '.pdp-price',
+    '[class*="pdp-mod-product-price" i]',
+    '[class*="pdp-v2-product-price" i]',
+  ]);
 
   return {
     title: document.title,
@@ -141,6 +157,14 @@ export async function observeListing(page, product, { timeoutMs, logger = consol
   }
 
   await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+
+  // Give the listing a chance to render; a page that never does is caught below.
+  if (typeof page.waitForSelector === 'function') {
+    await page.waitForSelector(LISTING_CONTENT, { timeout: timeoutMs }).catch(() => {});
+    // The price usually lands before the buy control, so let it settle.
+    await page.waitForTimeout?.(HYDRATION_SETTLE_MS);
+  }
+
   const snapshot = await page.evaluate(collectListingSnapshot);
   const finalUrl = page.url();
 
