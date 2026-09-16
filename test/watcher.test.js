@@ -370,3 +370,53 @@ test('logs only the first line of a multi-line failure', async () => {
   assert.equal(errors[0].includes('\n'), false);
   assert.match(errors[0], /page\.goto timeout/);
 });
+
+test('spaces out the listings within a round instead of bursting', async () => {
+  const waits = [];
+
+  await scanRound({
+    products,
+    observe: async (p) => ({ productUrl: p.url, available: false, priceCents: null }),
+    alertGate: new AlertGate(),
+    notify: async () => {},
+    logger: quietLogger,
+    betweenProductsMs: 50_000,
+    sleep: async (ms) => { waits.push(ms); },
+  });
+
+  // Two products: one gap between them, none before the first.
+  assert.deepEqual(waits, [50_000]);
+});
+
+test('does not pause between listings when spacing is off', async () => {
+  const waits = [];
+
+  await scanRound({
+    products,
+    observe: async (p) => ({ productUrl: p.url, available: false, priceCents: null }),
+    alertGate: new AlertGate(),
+    notify: async () => {},
+    logger: quietLogger,
+    sleep: async (ms) => { waits.push(ms); },
+  });
+
+  assert.deepEqual(waits, []);
+});
+
+test('subtracts time already spent in the round from the wait', async () => {
+  const waits = [];
+  let clock = 0;
+
+  await runWatcher({
+    config: { products: [products[0]], pollIntervalMs: 300_000, jitterMs: 0 },
+    observe: async (p) => { clock += 120_000; return { productUrl: p.url, available: false, priceCents: null }; },
+    notify: async () => {},
+    sleep: async (ms) => { waits.push(ms); },
+    now: () => clock,
+    shouldContinue: () => waits.length < 1,
+    logger: quietLogger,
+  });
+
+  // The round consumed 120s of the 300s cycle, so only 180s remain.
+  assert.deepEqual(waits, [180_000]);
+});

@@ -43,11 +43,16 @@ export async function scanRound({
   notify,
   logger = console,
   shouldContinue = () => true,
+  betweenProductsMs = 0,
+  sleep = defaultSleep,
 }) {
   const summary = { observed: 0, failures: 0, alerts: 0, blocked: 0 };
 
-  for (const product of products) {
+  for (const [index, product] of products.entries()) {
     if (!shouldContinue()) break;
+
+    // Spread the round's requests instead of firing them back to back.
+    if (index > 0 && betweenProductsMs > 0) await sleep(betweenProductsMs);
 
     try {
       const observation = await observe(product);
@@ -88,6 +93,7 @@ export async function runWatcher({
   random = Math.random,
   shouldContinue = () => true,
   onBlockLifted = null,
+  now = () => Date.now(),
   logger = console,
 }) {
   const { AlertGate } = await import('./alert-gate.js');
@@ -96,6 +102,12 @@ export async function runWatcher({
   let blockedStreak = 0;
 
   while (shouldContinue()) {
+    const startedAt = now();
+    // Spread each round's requests across most of the polling interval.
+    const betweenProductsMs = config.products.length > 1
+      ? Math.floor((config.pollIntervalMs * 0.8) / config.products.length)
+      : 0;
+
     const summary = await scanRound({
       products: config.products,
       observe,
@@ -103,6 +115,8 @@ export async function runWatcher({
       notify,
       logger,
       shouldContinue,
+      betweenProductsMs,
+      sleep,
     });
     const blockedNote = summary.blocked > 0
       ? ` — ${summary.blocked} blocked by Lazada's anti-bot page, not checked.`
@@ -133,6 +147,8 @@ export async function runWatcher({
     }
 
     const jitter = config.jitterMs > 0 ? Math.floor(random() * config.jitterMs) : 0;
-    await sleep(interval + jitter);
+    // The round itself consumed part of the cycle; only wait out the remainder.
+    const remaining = Math.max(0, interval + jitter - (now() - startedAt));
+    if (remaining > 0) await sleep(remaining);
   }
 }
