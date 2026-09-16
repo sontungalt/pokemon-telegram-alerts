@@ -11,8 +11,8 @@ const validEnvironment = {
 test('loads the supplied product listings', () => {
   const config = loadConfig(validEnvironment);
 
-  assert.equal(PRODUCTS.length, 10);
-  assert.equal(config.products[0].name, 'Ascended Heroes Pokémon Center ETB');
+  assert.equal(PRODUCTS.length, 18);
+  assert.equal(config.products[0].name, '30th Anniversary Pokémon Center ETB');
   assert.equal(config.products.at(-1).url, 'https://s.lazada.sg/s.f5Z2U?c=b');
 });
 

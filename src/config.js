@@ -1,4 +1,38 @@
 export const PRODUCTS = Object.freeze([
+  // 30th Anniversary wave — checked first each round so a restock alerts soonest.
+  {
+    name: '30th Anniversary Pokémon Center ETB',
+    url: 'https://s.lazada.sg/s.TkVZb?c=w',
+  },
+  {
+    name: '30th Tech Sticker Collection — Alolan Exeggutor',
+    url: 'https://s.lazada.sg/s.Tkfj0?c=w',
+  },
+  {
+    name: '30th Tech Sticker Collection — Lucario',
+    url: 'https://s.lazada.sg/s.Tkgo6?c=s',
+  },
+  {
+    name: '30th Binder',
+    url: 'https://s.lazada.sg/s.Tk9aW?c=w',
+  },
+  {
+    name: '30th Poster — Articuno, Zapdos & Moltres',
+    url: 'https://s.lazada.sg/s.TkiMq?c=v',
+  },
+  {
+    name: '30th ex Box — Sylveon ex',
+    url: 'https://s.lazada.sg/s.Tk6Xl?c=r',
+  },
+  {
+    name: '30th ex Box — Greninja ex',
+    url: 'https://s.lazada.sg/s.TkSg2?c=r',
+  },
+  {
+    name: '30th Knock Out Collection — Eevee',
+    url: 'https://s.lazada.sg/s.TkPnT?c=w',
+  },
+  // Ascended Heroes wave.
   {
     name: 'Ascended Heroes Pokémon Center ETB',
     url: 'https://s.lazada.sg/s.31pGa',
