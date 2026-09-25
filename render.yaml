@@ -13,9 +13,15 @@ services:
         sync: false
       - key: TELEGRAM_CHAT_ID
         sync: false
+      # Measured on 25 Sep 2026: three rounds 30s apart took the block rate from
+      # 11% to 84%. A long interval is what keeps the listings readable.
       - key: POLL_INTERVAL_SECONDS
-        value: "30"
+        value: "900"
       - key: POLL_JITTER_SECONDS
-        value: "0"
+        value: "60"
+      # A challenged page now fails as soon as the interstitial paints, so the
+      # timeout only has to cover a genuinely slow listing.
       - key: NAVIGATION_TIMEOUT_MS
-        value: "25000"
+        value: "15000"
+      - key: CHECK_CONCURRENCY
+        value: "2"

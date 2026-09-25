@@ -19,6 +19,7 @@ const SINGAPORE_PARTS = new Intl.DateTimeFormat('en-GB', {
   year: 'numeric',
   hour: '2-digit',
   minute: '2-digit',
+  second: '2-digit',
   hourCycle: 'h23',
 });
 
@@ -36,7 +37,14 @@ export function singaporeTimestamp(date) {
     SINGAPORE_PARTS.formatToParts(date).map(({ type, value }) => [type, value]),
   );
   const month = MONTHS[Number(parts.month) - 1];
-  return `${parts.day} ${month} ${parts.year}, ${parts.hour}:${parts.minute} SGT`;
+  // Milliseconds are identical in every zone, so they come straight off the
+  // Date rather than through the formatter.
+  const milliseconds = String(date.getMilliseconds()).padStart(3, '0');
+
+  return (
+    `${parts.day} ${month} ${parts.year}, ` +
+    `${parts.hour}:${parts.minute}:${parts.second}.${milliseconds} SGT`
+  );
 }
 
 export function formatAvailabilityMessage(observation, reason, detectedAt = new Date()) {

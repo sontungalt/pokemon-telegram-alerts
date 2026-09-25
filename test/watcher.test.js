@@ -159,6 +159,7 @@ test('waits for the configured interval plus jitter before the next round', asyn
       checks += 1;
       return checks < 3;
     },
+    now: () => 0,
     logger: quietLogger,
   });
 
@@ -349,6 +350,9 @@ test('returns to the normal interval as soon as a listing is readable', async ()
     notify: async () => {},
     sleep: async (ms) => { waits.push(ms); },
     shouldContinue: () => rounds < 4,
+    // A frozen clock: this asserts the backoff schedule, not how long the
+    // round happened to take, which otherwise shaves a millisecond at random.
+    now: () => 0,
     logger: quietLogger,
   });
 
@@ -419,4 +423,172 @@ test('subtracts time already spent in the round from the wait', async () => {
 
   // The round consumed 120s of the 300s cycle, so only 180s remain.
   assert.deepEqual(waits, [180_000]);
+});
+
+test('honours a configured listing spacing instead of spreading the round', async () => {
+  const waits = [];
+  let done = false;
+
+  await runWatcher({
+    config: { products, pollIntervalMs: 30_000, jitterMs: 0, listingSpacingMs: 200 },
+    observe: async (product) => ({ productUrl: product.url, available: false, priceCents: null }),
+    notify: async () => {},
+    sleep: async (ms) => { waits.push(ms); },
+    shouldContinue: () => !done,
+    logger: { ...quietLogger, info() { done = true; } },
+  });
+
+  assert.deepEqual(waits, [200]);
+});
+
+test('spreads the round across the interval when no spacing is configured', async () => {
+  const waits = [];
+  let done = false;
+
+  await runWatcher({
+    config: { products, pollIntervalMs: 30_000, jitterMs: 0 },
+    observe: async (product) => ({ productUrl: product.url, available: false, priceCents: null }),
+    notify: async () => {},
+    sleep: async (ms) => { waits.push(ms); },
+    shouldContinue: () => !done,
+    logger: { ...quietLogger, info() { done = true; } },
+  });
+
+  // Two products over 80% of a 30s interval.
+  assert.deepEqual(waits, [12_000]);
+});
+
+test('a configured spacing of zero means back-to-back, not "unset"', async () => {
+  const waits = [];
+  let done = false;
+
+  await runWatcher({
+    config: { products, pollIntervalMs: 30_000, jitterMs: 0, listingSpacingMs: 0 },
+    observe: async (product) => ({ productUrl: product.url, available: false, priceCents: null }),
+    notify: async () => {},
+    sleep: async (ms) => { waits.push(ms); },
+    shouldContinue: () => !done,
+    logger: { ...quietLogger, info() { done = true; } },
+  });
+
+  assert.deepEqual(waits, []);
+});
+
+const sixProducts = Array.from({ length: 6 }, (_, i) => ({
+  name: `Item ${i}`,
+  url: `https://s.lazada.sg/s.item${i}`,
+}));
+
+function idleObservation(product) {
+  return { productUrl: product.url, available: false, priceCents: null };
+}
+
+test('overlaps checks up to the configured concurrency', async () => {
+  let inFlight = 0;
+  let peak = 0;
+
+  await scanRound({
+    products: sixProducts,
+    observe: async (product) => {
+      inFlight += 1;
+      peak = Math.max(peak, inFlight);
+      await new Promise((resolve) => setTimeout(resolve, 10));
+      inFlight -= 1;
+      return idleObservation(product);
+    },
+    alertGate: new AlertGate(),
+    notify: async () => {},
+    logger: quietLogger,
+    concurrency: 3,
+    sleep: async () => {},
+  });
+
+  assert.equal(peak, 3);
+});
+
+test('never hands the same page slot to two checks at once', async () => {
+  const busy = new Set();
+  const seen = new Set();
+  let clashed = false;
+
+  await scanRound({
+    products: sixProducts,
+    observe: async (product, slot) => {
+      if (busy.has(slot)) clashed = true;
+      busy.add(slot);
+      seen.add(slot);
+      await new Promise((resolve) => setTimeout(resolve, 5));
+      busy.delete(slot);
+      return idleObservation(product);
+    },
+    alertGate: new AlertGate(),
+    notify: async () => {},
+    logger: quietLogger,
+    concurrency: 3,
+    sleep: async () => {},
+  });
+
+  assert.equal(clashed, false);
+  assert.deepEqual([...seen].sort(), [0, 1, 2]);
+});
+
+test('spaces requests globally, not once per worker', async () => {
+  const waits = [];
+
+  await scanRound({
+    products: sixProducts,
+    observe: async (product) => idleObservation(product),
+    alertGate: new AlertGate(),
+    notify: async () => {},
+    logger: quietLogger,
+    concurrency: 3,
+    betweenProductsMs: 100,
+    sleep: async (ms) => { waits.push(ms); },
+  });
+
+  // Six products means five gaps, whatever the worker count. Raising
+  // concurrency must overlap the waiting, not triple the request rate.
+  assert.deepEqual(waits, [100, 100, 100, 100, 100]);
+});
+
+test('still checks every product exactly once when running concurrently', async () => {
+  const checked = [];
+
+  const summary = await scanRound({
+    products: sixProducts,
+    observe: async (product) => {
+      checked.push(product.name);
+      return idleObservation(product);
+    },
+    alertGate: new AlertGate(),
+    notify: async () => {},
+    logger: quietLogger,
+    concurrency: 4,
+    sleep: async () => {},
+  });
+
+  assert.equal(summary.observed, 6);
+  assert.deepEqual(checked.sort(), sixProducts.map((p) => p.name).sort());
+});
+
+test('stops claiming new work mid-round once shutdown is requested', async () => {
+  const checked = [];
+  let stop = false;
+
+  await scanRound({
+    products: sixProducts,
+    observe: async (product) => {
+      checked.push(product.name);
+      if (checked.length >= 2) stop = true;
+      return idleObservation(product);
+    },
+    alertGate: new AlertGate(),
+    notify: async () => {},
+    logger: quietLogger,
+    shouldContinue: () => !stop,
+    concurrency: 2,
+    sleep: async () => {},
+  });
+
+  assert.ok(checked.length < 6, `expected an early stop, checked ${checked.length}`);
 });

@@ -38,7 +38,15 @@ async function main() {
   await context.route('**/*', (route) => (
     SKIPPED_RESOURCES.has(route.request().resourceType()) ? route.abort() : route.continue()
   ));
-  const page = await context.newPage();
+  // One page per concurrent check: a page cannot serve two navigations at once.
+  const pages = [];
+  for (let slot = 0; slot < config.checkConcurrency; slot += 1) {
+    pages.push(await context.newPage());
+  }
+
+  if (config.checkConcurrency > 1) {
+    logger.info(`Checking up to ${config.checkConcurrency} listings at a time.`);
+  }
 
   try {
     await runWatcher({
@@ -46,7 +54,7 @@ async function main() {
       shouldContinue: () => !stopping,
       sleep: (milliseconds) => waiter.sleep(milliseconds),
       logger,
-      observe: (product) => observeListing(page, product, {
+      observe: (product, slot = 0) => observeListing(pages[slot], product, {
         timeoutMs: config.navigationTimeoutMs,
         logger,
       }),

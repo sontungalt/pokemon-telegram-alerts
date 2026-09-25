@@ -369,3 +369,110 @@ test('reports no price rather than a carousel price when the product price is ab
   assert.equal(observation.priceCents, null);
   assert.equal(observation.available, true);
 });
+
+test('fails a challenged read as soon as the interstitial paints', async () => {
+  resetShareLinkCache();
+  const realPage = await browser.newPage();
+  try {
+    const product = { name: 'Blocked', url: 'https://www.lazada.sg/products/blocked-i1.html' };
+    const page = {
+      async goto() {
+        // No product markup ever arrives, only the interstitial.
+        await realPage.setContent('<title>punish</title><div id="baxia-dialog-content">verify</div>');
+      },
+      evaluate: (...args) => realPage.evaluate(...args),
+      waitForSelector: (...args) => realPage.waitForSelector(...args),
+      waitForTimeout: (...args) => realPage.waitForTimeout(...args),
+      url: () => product.url,
+    };
+
+    const startedAt = Date.now();
+    await assert.rejects(
+      observeListing(page, product, { timeoutMs: TIMEOUT, logger: quietLogger }),
+      (error) => error.code === 'ANTI_BOT_CHALLENGE',
+    );
+
+    // Previously this waited out the full navigation timeout for listing markup
+    // that was never coming, then slept on top of it.
+    assert.ok(
+      Date.now() - startedAt < 2_000,
+      `a challenged read should fail fast, took ${Date.now() - startedAt}ms`,
+    );
+  } finally {
+    await realPage.close();
+  }
+});
+
+test('reports an available listing without waiting out the settle budget', async () => {
+  resetShareLinkCache();
+  const realPage = await browser.newPage();
+  try {
+    const product = { name: 'In stock', url: 'https://www.lazada.sg/products/stock-i1.html' };
+    const page = {
+      async goto() {
+        await realPage.setContent(
+          '<title>Pokémon Example ETB</title>' +
+            '<span class="pdp-price">S$ 45.90</span><div class="pdp-button">Add to Cart</div>',
+        );
+      },
+      evaluate: (...args) => realPage.evaluate(...args),
+      waitForSelector: (...args) => realPage.waitForSelector(...args),
+      waitForTimeout: (...args) => realPage.waitForTimeout(...args),
+      url: () => product.url,
+    };
+
+    const startedAt = Date.now();
+    const observation = await observeListing(page, product, { timeoutMs: TIMEOUT, logger: quietLogger });
+
+    assert.equal(observation.available, true);
+    assert.ok(
+      Date.now() - startedAt < 1_000,
+      `a ready control should return immediately, took ${Date.now() - startedAt}ms`,
+    );
+  } finally {
+    await realPage.close();
+  }
+});
+
+test('retries a navigation the share bridge aborted out from under it', async () => {
+  resetShareLinkCache();
+  const product = { name: 'Raced item', url: 'https://www.lazada.sg/products/raced-i1.html' };
+  let attempts = 0;
+
+  const page = {
+    async goto() {
+      attempts += 1;
+      if (attempts === 1) {
+        throw new Error(`page.goto: net::ERR_ABORTED at ${product.url}`);
+      }
+    },
+    async evaluate() { return purchasable; },
+    url: () => product.url,
+  };
+
+  const observation = await observeListing(page, product, { timeoutMs: TIMEOUT, logger: quietLogger });
+
+  assert.equal(attempts, 2);
+  assert.equal(observation.available, true);
+});
+
+test('does not retry a navigation that failed for any other reason', async () => {
+  resetShareLinkCache();
+  const product = { name: 'Timed out', url: 'https://www.lazada.sg/products/slow-i1.html' };
+  let attempts = 0;
+
+  const page = {
+    async goto() {
+      attempts += 1;
+      throw new Error('page.goto: Timeout 15000ms exceeded');
+    },
+    async evaluate() { return purchasable; },
+    url: () => product.url,
+  };
+
+  await assert.rejects(
+    observeListing(page, product, { timeoutMs: TIMEOUT, logger: quietLogger }),
+    /Timeout 15000ms exceeded/,
+  );
+  assert.equal(attempts, 1);
+});

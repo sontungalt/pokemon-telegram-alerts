@@ -36,7 +36,19 @@ const LISTING_CONTENT = [
   '.pdp-button',
   '[class*="add-to-cart" i]',
 ].join(', ');
-const HYDRATION_SETTLE_MS = 1_500;
+
+// The containers an interstitial renders in place of the product page. Waiting
+// for these alongside the listing markup lets a blocked read resolve as soon as
+// the challenge paints, instead of burning the whole navigation timeout waiting
+// for product markup that is never going to arrive.
+const CHALLENGE_CONTENT =
+  '#baxia-dialog-content, .nc_wrapper, #nocaptcha, .J_MIDDLEWARE_FRAME_WIDGET';
+
+// An upper bound on waiting for the buy control, not a fixed cost. The price
+// usually lands before the control, so the snapshot is retaken until a control
+// appears rather than sleeping for the worst case on every single read.
+const CONTROL_SETTLE_MS = 1_500;
+const CONTROL_POLL_MS = 100;
 
 function isChallengeUrl(value) {
   return CHALLENGE_URL_MARKERS.some((marker) => String(value ?? '').includes(marker));
@@ -149,6 +161,21 @@ function collectListingSnapshot() {
   };
 }
 
+/**
+ * The share bridge runs a script that navigates itself to the destination. If
+ * that fires while we are issuing our own goto, Chromium aborts one of them and
+ * reports ERR_ABORTED. The page is fine a moment later, so a single retry turns
+ * a spurious failure into a normal read.
+ */
+async function gotoSettled(page, url, options) {
+  try {
+    return await page.goto(url, options);
+  } catch (error) {
+    if (!/ERR_ABORTED/.test(error.message ?? '')) throw error;
+    return page.goto(url, options);
+  }
+}
+
 export async function observeListing(page, product, { timeoutMs, logger = console }) {
   let targetUrl = product.url;
 
@@ -156,16 +183,31 @@ export async function observeListing(page, product, { timeoutMs, logger = consol
     targetUrl = await resolveShareLink(page, product, { timeoutMs, logger }) ?? product.url;
   }
 
-  await page.goto(targetUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+  await gotoSettled(page, targetUrl, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+
+  let snapshot;
 
   // Give the listing a chance to render; a page that never does is caught below.
   if (typeof page.waitForSelector === 'function') {
-    await page.waitForSelector(LISTING_CONTENT, { timeout: timeoutMs }).catch(() => {});
-    // The price usually lands before the buy control, so let it settle.
-    await page.waitForTimeout?.(HYDRATION_SETTLE_MS);
+    // Whichever paints first settles it: the listing, or the interstitial.
+    await page
+      .waitForSelector(`${LISTING_CONTENT}, ${CHALLENGE_CONTENT}`, { timeout: timeoutMs })
+      .catch(() => {});
+
+    // Re-read until the purchase control appears. A page that is challenged, or
+    // that genuinely has no control, still costs the full budget — but a listing
+    // that does have one is reported the moment it renders, which is the case
+    // where latency actually matters.
+    const deadline = Date.now() + CONTROL_SETTLE_MS;
+    for (;;) {
+      snapshot = await page.evaluate(collectListingSnapshot);
+      if (snapshot.challenged || snapshot.control || Date.now() >= deadline) break;
+      await page.waitForTimeout?.(CONTROL_POLL_MS);
+    }
+  } else {
+    snapshot = await page.evaluate(collectListingSnapshot);
   }
 
-  const snapshot = await page.evaluate(collectListingSnapshot);
   const finalUrl = page.url();
 
   // A blocked read must never be reported as "out of stock": that would silence

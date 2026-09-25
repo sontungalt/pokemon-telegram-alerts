@@ -29,6 +29,10 @@ export const PRODUCTS = Object.freeze([
     url: 'https://s.lazada.sg/s.TkSg2?c=r',
   },
   {
+    name: '30th 2-Pack Blister — Eevee',
+    url: 'https://s.lazada.sg/s.TkDht?c=v',
+  },
+  {
     name: '30th Knock Out Collection — Eevee',
     url: 'https://s.lazada.sg/s.TkPnT?c=w',
   },
@@ -90,6 +94,21 @@ function boundedInteger(env, name, { fallback, minimum, unit }) {
   return value;
 }
 
+/**
+ * Like boundedInteger, but an unset variable means "no opinion" rather than a
+ * default. The watcher derives its own value when this returns null.
+ */
+function optionalBoundedInteger(env, name, { minimum, maximum, unit }) {
+  const raw = env[name]?.trim?.() ?? env[name];
+  if (raw === undefined || raw === '') return null;
+
+  const value = Number(raw);
+  if (!Number.isInteger(value) || value < minimum || value > maximum) {
+    throw new Error(`${name} must be an integer between ${minimum} and ${maximum} ${unit}.`);
+  }
+  return value;
+}
+
 function validateProductUrls(products) {
   for (const product of products) {
     const url = new URL(product.url);
@@ -119,12 +138,32 @@ export function loadConfig(env = process.env) {
     unit: 'milliseconds',
   });
 
+  // The pause between consecutive listings inside one round. Leaving it unset
+  // spreads the round across the interval; setting it pins the gap instead.
+  // This changes how the round's requests are distributed, never how many there
+  // are — the count is one per listing per round either way.
+  const listingSpacingMs = optionalBoundedInteger(env, 'LISTING_SPACING_MS', {
+    minimum: 0,
+    maximum: 60_000,
+    unit: 'milliseconds',
+  });
+
+  // How many listings may be in flight at once. Each one needs its own browser
+  // page, so this is also the size of the page pool.
+  const checkConcurrency = boundedInteger(env, 'CHECK_CONCURRENCY', {
+    fallback: 1,
+    minimum: 1,
+    unit: 'checks',
+  });
+
   return Object.freeze({
     telegramBotToken: requiredString(env, 'TELEGRAM_BOT_TOKEN'),
     telegramChatId: requiredString(env, 'TELEGRAM_CHAT_ID'),
     pollIntervalMs: pollIntervalSeconds * 1_000,
     jitterMs: jitterSeconds * 1_000,
     navigationTimeoutMs,
+    listingSpacingMs,
+    checkConcurrency,
     products: PRODUCTS,
   });
 }

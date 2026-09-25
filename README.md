@@ -137,9 +137,30 @@ Set these in `.env` (local) or in Render's dashboard (cloud).
 | `POLL_INTERVAL_SECONDS` | `30` | Seconds between full passes over all ten listings. **Values below 30 are rejected** so the watcher stays a polite observer. |
 | `POLL_JITTER_SECONDS` | `0` | Optional random extra delay per round, so requests are not exactly periodic. |
 | `NAVIGATION_TIMEOUT_MS` | `25000` | How long one Lazada page load may take before that check is abandoned. |
+| `LISTING_SPACING_MS` | derived | Pause between consecutive listings. Unset, the round is spread across the interval. |
+| `CHECK_CONCURRENCY` | `1` | How many listings may be in flight at once. Each gets its own browser page. |
 
 Neither the token nor the chat ID is ever printed to the console or included in an
 error message.
+
+### Round latency
+
+`CHECK_CONCURRENCY` is the setting that matters most for how quickly a restock is
+noticed. A round spends nearly all of its time *waiting on replies*, so checking
+several listings at once overlaps that waiting rather than stacking it:
+
+```sh
+CHECK_CONCURRENCY=5 npm start
+```
+
+Raising it does **not** raise the request rate — `LISTING_SPACING_MS` still applies
+between consecutive requests, and a round still issues exactly one request per
+listing. It changes how much of the round is spent idle.
+
+Two related costs were removed at the same time: a challenged page now fails as
+soon as the interstitial paints instead of waiting out the full navigation
+timeout, and a listing whose purchase control is already rendered is reported
+immediately instead of sleeping through a fixed settle window.
 
 ## What counts as "in stock"
 
@@ -167,10 +188,14 @@ Pokémon restock detected
 Ascended Heroes Pokémon Center ETB
 Price: S$89.90
 Seller: Pokémon Official Store
-Detected: 14 Sep 2026, 20:42 SGT
+Detected: 14 Sep 2026, 20:42:07.148 SGT
 
 Open Lazada listing   ← clickable, direct product link
 ```
+
+The detection time is stamped to the millisecond, matching the precision public
+restock channels publish, so your own alerts can be compared against theirs on
+the same scale.
 
 ## Deploy as an always-on cloud worker (optional)
 
@@ -200,6 +225,43 @@ npm test
 Runs the full suite on Node's built-in test runner, including real headless-Chromium
 tests that render sample markup and assert what the detector concludes from it.
 
+## Recording the public restock feed
+
+```sh
+npm run feed:watch
+```
+
+Public restock channels publish a detection timestamp to the millisecond
+(`Found at 13:25:11.135`) alongside each drop. That is free ground truth about
+**when restocks actually happen**, which is the measurement this project has
+never had — the watcher has fired zero alerts, so it has no observations of its
+own to reason from.
+
+The recorder reads a channel's public `t.me/s/<handle>` preview page, the same
+one any visitor sees in a browser. It uses no account, no bot token, and no API
+credentials, and it fetches at a browsing cadence. Set `FEED_CHANNEL_HANDLE` to
+a channel handle and it appends one JSONL row per drop to `feed/restocks.jsonl`:
+
+```json
+{"id":"channel/1234","productName":"30th Celebration 2-Pack Blister",
+ "pdpUrl":"https://www.lazada.sg/products/…","foundAt":"2026-09-23T05:25:11.135Z",
+ "postedAt":"2026-09-23T05:25:30.000Z","publishDelayMs":18865}
+```
+
+**`foundAt` is the column that pays.** Accumulate enough rows and the
+distribution answers whether drops cluster into predictable windows or arrive
+uniformly at random. If they cluster, watching hard for a known hour beats
+watching constantly, and the monitoring-fleet question mostly dissolves.
+
+**`publishDelayMs` does not measure what it looks like it measures.** The
+preview page timestamps posts to the second while the body reports detection to
+the millisecond, so every gap lands inside ±1s — in the first live sample, all
+20 of 20. More to the point, a channel that restamps `Found at` at publication
+will always report a delay of zero no matter how late it actually posted, so a
+*(Delayed)* channel cannot be used to measure its own delay. The column is kept
+because a genuine multi-second gap would still be worth seeing, and
+`withinTimestampResolution` counts how many rows carried no usable signal.
+
 ## Project layout
 
 ```
@@ -213,5 +275,8 @@ src/
   telegram.js          message formatting and Bot API delivery
   telegram-chat-id.js  `npm run telegram:chat-id`
   send-telegram-check.js `npm run telegram:test`
+  restock-feed.js      parses a public restock post into a dataset row
+  feed-collector.js    reads the t.me preview page and appends new drops
+  feed-watch.js        `npm run feed:watch`
 test/                  one file per module
 ```

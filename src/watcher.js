@@ -44,24 +44,42 @@ export async function scanRound({
   logger = console,
   shouldContinue = () => true,
   betweenProductsMs = 0,
+  concurrency = 1,
   sleep = defaultSleep,
 }) {
   const summary = { observed: 0, failures: 0, alerts: 0, blocked: 0 };
 
-  for (const [index, product] of products.entries()) {
-    if (!shouldContinue()) break;
+  let dispatched = 0;
+  // Dispatches are serialized through this chain so the spacing stays between
+  // consecutive requests. Raising concurrency then overlaps the waiting on
+  // replies — which is where a round actually spends its time — without
+  // multiplying the rate at which requests leave this machine.
+  let queue = Promise.resolve();
 
-    // Spread the round's requests instead of firing them back to back.
-    if (index > 0 && betweenProductsMs > 0) await sleep(betweenProductsMs);
+  function claimNext() {
+    const turn = queue.then(async () => {
+      // Bounds first: a worker finding the queue empty must not consume a
+      // shouldContinue() check, or an exhausted round would look like a stop.
+      if (dispatched >= products.length) return null;
+      if (!shouldContinue()) return null;
+      if (dispatched > 0 && betweenProductsMs > 0) await sleep(betweenProductsMs);
+      return dispatched++;
+    });
+    queue = turn.then(() => undefined, () => undefined);
+    return turn;
+  }
 
+  async function check(product, slot) {
     try {
-      const observation = await observe(product);
+      // The slot lets the caller hand each worker its own browser page; a single
+      // page cannot be navigated by two checks at once.
+      const observation = await observe(product, slot);
       summary.observed += 1;
 
       const decision = alertGate.evaluate(observation);
       if (!decision.send) {
         alertGate.commit(observation);
-        continue;
+        return;
       }
 
       // Commit only once Telegram has accepted the message: a delivery failure
@@ -81,6 +99,17 @@ export async function scanRound({
       }
     }
   }
+
+  async function runWorker(slot) {
+    for (;;) {
+      const index = await claimNext();
+      if (index === null) return;
+      await check(products[index], slot);
+    }
+  }
+
+  const workerCount = Math.max(1, Math.min(concurrency, products.length));
+  await Promise.all(Array.from({ length: workerCount }, (_, slot) => runWorker(slot)));
 
   return summary;
 }
@@ -103,10 +132,14 @@ export async function runWatcher({
 
   while (shouldContinue()) {
     const startedAt = now();
-    // Spread each round's requests across most of the polling interval.
-    const betweenProductsMs = config.products.length > 1
-      ? Math.floor((config.pollIntervalMs * 0.8) / config.products.length)
-      : 0;
+    // A configured spacing wins; otherwise spread each round's requests across
+    // most of the polling interval. Either way the round issues exactly one
+    // request per listing, so this trades burstiness, not volume.
+    const betweenProductsMs = config.listingSpacingMs ?? (
+      config.products.length > 1
+        ? Math.floor((config.pollIntervalMs * 0.8) / config.products.length)
+        : 0
+    );
 
     const summary = await scanRound({
       products: config.products,
@@ -116,6 +149,7 @@ export async function runWatcher({
       logger,
       shouldContinue,
       betweenProductsMs,
+      concurrency: config.checkConcurrency ?? 1,
       sleep,
     });
     const blockedNote = summary.blocked > 0

@@ -28,12 +28,21 @@ test('includes the product name, price and clickable listing link', () => {
   assert.match(message, /href="https:\/\/www\.lazada\.sg\/products\/example-i123\.html"/);
 });
 
-test('stamps the detection time in Singapore time', () => {
+test('stamps the detection time in Singapore time, down to the millisecond', () => {
   const message = formatAvailabilityMessage(observation(), 'available', detectedAt);
 
-  assert.match(message, /14 Sep 2026/);
-  assert.match(message, /20:42/);
-  assert.match(message, /SGT/);
+  assert.match(message, /Detected: 14 Sep 2026, 20:42:07\.000 SGT/);
+});
+
+test('pads a sub-100ms reading rather than truncating it', () => {
+  // .048 must not render as .48, which would read as 480ms.
+  const message = formatAvailabilityMessage(
+    observation(),
+    'available',
+    new Date('2026-09-14T12:42:07.048Z'),
+  );
+
+  assert.match(message, /Detected: 14 Sep 2026, 20:42:07\.048 SGT/);
 });
 
 test('says the price is unknown rather than inventing one', () => {

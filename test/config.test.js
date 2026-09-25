@@ -11,7 +11,7 @@ const validEnvironment = {
 test('loads the supplied product listings', () => {
   const config = loadConfig(validEnvironment);
 
-  assert.equal(PRODUCTS.length, 18);
+  assert.equal(PRODUCTS.length, 19);
   assert.equal(config.products[0].name, '30th Anniversary Pokémon Center ETB');
   assert.equal(config.products.at(-1).url, 'https://s.lazada.sg/s.f5Z2U?c=b');
 });
@@ -73,4 +73,39 @@ test('never exposes the token or chat ID through string conversion', () => {
 
   assert.doesNotMatch(JSON.stringify(config.products), /telegram-token/);
   assert.equal(Object.isFrozen(config), true);
+});
+
+test('accepts a listing spacing and reports none when it is unset', () => {
+  assert.equal(loadConfig(validEnvironment).listingSpacingMs, null);
+  assert.equal(
+    loadConfig({ ...validEnvironment, LISTING_SPACING_MS: '200' }).listingSpacingMs,
+    200,
+  );
+  assert.equal(loadConfig({ ...validEnvironment, LISTING_SPACING_MS: '0' }).listingSpacingMs, 0);
+});
+
+test('rejects a listing spacing that is negative, fractional, or absurdly long', () => {
+  for (const value of ['-1', '2.5', '90000', 'soon']) {
+    assert.throws(
+      () => loadConfig({ ...validEnvironment, LISTING_SPACING_MS: value }),
+      /LISTING_SPACING_MS must be an integer between 0 and 60000 milliseconds\./,
+    );
+  }
+});
+
+test('defaults to one check at a time and accepts a larger pool', () => {
+  assert.equal(loadConfig(validEnvironment).checkConcurrency, 1);
+  assert.equal(
+    loadConfig({ ...validEnvironment, CHECK_CONCURRENCY: '5' }).checkConcurrency,
+    5,
+  );
+});
+
+test('rejects a concurrency below one', () => {
+  for (const value of ['0', '-2', '1.5']) {
+    assert.throws(
+      () => loadConfig({ ...validEnvironment, CHECK_CONCURRENCY: value }),
+      /CHECK_CONCURRENCY must be an integer of at least 1 checks\./,
+    );
+  }
 });

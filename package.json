@@ -10,7 +10,9 @@
     "start": "node src/index.js",
     "test": "node --test",
     "telegram:chat-id": "node src/telegram-chat-id.js",
-    "telegram:test": "node src/send-telegram-check.js"
+    "telegram:test": "node src/send-telegram-check.js",
+    "feed:watch": "node src/feed-watch.js",
+    "feed:report": "node src/feed-report.js"
   },
   "dependencies": {
     "dotenv": "^16.4.7",
